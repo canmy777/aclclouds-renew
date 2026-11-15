@@ -7,7 +7,9 @@
 //
 // Usage: node restart.mjs
 // Env:
-//   ACL_SERVER_ID     app id (or the repo secret of the same name)
+//   ACL_SERVER_ID     app id (optional: if unset, the script discovers the
+//                     single hosting service via the subscriptions API,
+//                     the same way renew.mjs does)
 //   ACL_USERNAME      panel login (falls back to EMAIL)
 //   ACL_PASSWORD      panel password (falls back to PASSWORD)
 //   ACL_BASE_URL      default https://aclclouds.com
@@ -24,7 +26,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const BASE = (process.env.ACL_BASE_URL || 'https://aclclouds.com').replace(/\/+$/, '');
-const SERVER_ID = process.env.ACL_SERVER_ID || '';
+let SERVER_ID = process.env.ACL_SERVER_ID || '';
 const USERNAME = process.env.ACL_USERNAME || process.env.EMAIL || '';
 const PASSWORD = process.env.ACL_PASSWORD || process.env.PASSWORD || '';
 const ACTION = (process.env.RESTART_ACTION || 'restart').toLowerCase();
@@ -55,15 +57,17 @@ async function tg(text) {
 }
 
 // --- config validation (runs before any browser is launched) ---
-if (!SERVER_ID) fail('missing ACL_SERVER_ID');
 if (!['restart', 'start', 'stop'].includes(ACTION)) {
   fail(`bad RESTART_ACTION "${ACTION}" (want restart|start|stop)`);
 }
-const powerUrl = `${BASE}/api/client/hosting/apps/${SERVER_ID}/power`;
 const body = { action: ACTION };
 
 if (DRY_RUN) {
-  log(`DRY_RUN: would send POST ${powerUrl}`);
+  if (SERVER_ID) {
+    log(`DRY_RUN: would send POST ${BASE}/api/client/hosting/apps/${SERVER_ID}/power`);
+  } else {
+    log('DRY_RUN: no ACL_SERVER_ID — would discover the service id via GET /api/client/credits/subscriptions, then POST {BASE}/api/client/hosting/apps/<id>/power');
+  }
   log(`DRY_RUN: body ${JSON.stringify(body)}`);
   log('DRY_RUN: nothing sent, exit 0');
   process.exit(0);
@@ -131,6 +135,25 @@ try {
   } else {
     log('logged in via cached session');
   }
+
+  // Resolve which app to restart: an explicit id wins, otherwise discover
+  // the (single) hosting service via the subscriptions API, the same way
+  // the renew script finds its services.
+  if (!SERVER_ID) {
+    const r = await api('/api/client/credits/subscriptions');
+    const list = Array.isArray(r.json) ? r.json : (r.json?.data ?? []);
+    const hosting = list.filter((s) => (s?.kind || 'hosting') === 'hosting');
+    const candidates = hosting.length ? hosting : list;
+    if (candidates.length === 0) fail('no hosting service found via subscriptions API — set ACL_SERVER_ID');
+    if (candidates.length > 1) {
+      const names = candidates.map((s) => `${s?.name || '?'} (${String(s?.service_id || s?.id || '').replace(/^hosting-/, '')})`).join(', ');
+      fail(`multiple hosting services found (${names}) — set ACL_SERVER_ID to the one to restart`);
+    }
+    SERVER_ID = String(candidates[0].service_id || candidates[0].id || '').replace(/^hosting-/, '');
+    if (!SERVER_ID) fail('could not read service_id from subscriptions API — set ACL_SERVER_ID');
+    log(`discovered server id: ${SERVER_ID}`);
+  }
+  const powerUrl = `${BASE}/api/client/hosting/apps/${SERVER_ID}/power`;
 
   // Baseline: how many power.<action> events exist before we call?
   const activityUrl = `/api/client/hosting/apps/${SERVER_ID}/activity`;

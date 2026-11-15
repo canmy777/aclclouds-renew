@@ -166,15 +166,38 @@ try {
   }
   const powerUrl = `${BASE}/api/client/hosting/apps/${SERVER_ID}/power`;
 
-  // Baseline: how many power.<action> events exist before we call?
+  // Baseline: snapshot the activity log before we call, so we can tell a
+  // fresh power.<action> event apart from older ones.
   const activityUrl = `/api/client/hosting/apps/${SERVER_ID}/activity`;
-  const countEvents = async () => {
-    const r = await api(activityUrl);
-    if (r.status !== 200 || !Array.isArray(r.json?.data)) return -1;
-    return r.json.data.filter((e) => e?.name === `power.${ACTION}`).length;
+  let activityShapeLogged = false;
+  const pickActivityList = (j) => {
+    if (Array.isArray(j)) return j;
+    if (Array.isArray(j?.data)) return j.data;
+    if (Array.isArray(j?.activity)) return j.activity;
+    if (Array.isArray(j?.events)) return j.events;
+    return null;
   };
-  const before = await countEvents();
-  log(`power.${ACTION} events before call: ${before}`);
+  const isPowerEvent = (e) => {
+    if (!e || typeof e !== 'object') return false;
+    const v = e.name || e.event || e.type || e.action || '';
+    return v === `power.${ACTION}` || v === ACTION || JSON.stringify(e).includes(`power.${ACTION}`);
+  };
+  const snapshotActivity = async () => {
+    const r = await api(activityUrl);
+    const list = pickActivityList(r.json);
+    if (!Array.isArray(list)) return { count: -1, newest: '' };
+    if (!activityShapeLogged) {
+      activityShapeLogged = true;
+      log(`activity API: HTTP ${r.status}, items: ${list.length}, sample keys: ${Object.keys(list[0] || {}).join(',')}`);
+    }
+    const newest = list[0] || null;
+    return {
+      count: list.filter(isPowerEvent).length,
+      newest: newest ? (newest.id ?? newest.created_at ?? JSON.stringify(newest)) : '',
+    };
+  };
+  const before = await snapshotActivity();
+  log(`power.${ACTION} events before call: ${before.count}`);
 
   log(`POST ${powerUrl} ${JSON.stringify(body)}`);
   const res = await api(`/api/client/hosting/apps/${SERVER_ID}/power`, 'POST', body);
@@ -188,9 +211,11 @@ try {
   let verified = false;
   for (let i = 0; i < 12; i++) {
     await sleep(10000);
-    const now = await countEvents();
-    if (before >= 0 && now > before) { verified = true; break; }
-    if (before < 0 && now > 0) { verified = true; break; }
+    const now = await snapshotActivity();
+    if (now.count > before.count) { verified = true; break; }
+    // Fallback: the newest entry changed and is a power event (covers a
+    // capped activity list where an old event drops off the page).
+    if (before.newest && now.newest && now.newest !== before.newest && now.count >= before.count && now.count > 0) { verified = true; break; }
     log(`waiting for power.${ACTION} event… (${i + 1}/12)`);
   }
   if (!verified) {

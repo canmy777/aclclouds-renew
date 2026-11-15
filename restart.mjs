@@ -141,7 +141,18 @@ try {
   // the renew script finds its services.
   if (!SERVER_ID) {
     const r = await api('/api/client/credits/subscriptions');
-    const list = Array.isArray(r.json) ? r.json : (r.json?.data ?? []);
+    const pickList = (j) => {
+      if (Array.isArray(j)) return j;
+      if (Array.isArray(j?.data)) return j.data;
+      if (Array.isArray(j?.subscriptions)) return j.subscriptions;
+      if (Array.isArray(j?.data?.subscriptions)) return j.data.subscriptions;
+      return [];
+    };
+    const list = pickList(r.json);
+    log(`subscriptions API: HTTP ${r.status}, top-level keys: ${r.json && typeof r.json === 'object' ? Object.keys(r.json).join(',') : typeof r.json}, items: ${list.length}`);
+    if (list.length === 0) {
+      log(`subscriptions API raw (first 300 chars): ${r.text.slice(0, 300)}`);
+    }
     const hosting = list.filter((s) => (s?.kind || 'hosting') === 'hosting');
     const candidates = hosting.length ? hosting : list;
     if (candidates.length === 0) fail('no hosting service found via subscriptions API — set ACL_SERVER_ID');

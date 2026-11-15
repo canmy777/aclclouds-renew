@@ -1,0 +1,79 @@
+name: ACLClouds BOT Restart
+
+# Manual only: restarting the bot on a schedule would mask real problems
+# (and a restart loop). Run it from the Actions tab when the bot is stuck.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Power action'
+        required: true
+        default: 'restart'
+        type: choice
+        options:
+          - restart
+          - start
+          - stop
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: aclclouds-restart
+  cancel-in-progress: false
+
+jobs:
+  restart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      # Reuse the login session the renew workflow keeps warm, so this
+      # usually skips the login captcha entirely.
+      - uses: actions/cache@v4
+        with:
+          path: |
+            auth-1.json
+            auth-2.json
+            auth-3.json
+          key: acl-session-${{ github.run_id }}
+          restore-keys: |
+            acl-session-
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-browsers-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install npm deps
+        run: npm ci
+
+      - name: Install Playwright Chromium
+        run: |
+          # Default: no apt (runner image already has Chromium libs).
+          npx playwright install chromium
+          # Launch self-check; fall back to installing system deps if needed.
+          if ! node -e "import('playwright').then(async ({chromium}) => { const b = await chromium.launch(); await b.close(); }).catch((e) => { console.error('[launch-check]', e.message); process.exit(1); })"; then
+            echo "Chromium launch check failed, retrying with system deps..."
+            for i in 1 2 3; do
+              npx playwright install --with-deps chromium && break || sleep 15
+            done
+          fi
+
+      - name: Restart BOT
+        env:
+          ACL_USERNAME: ${{ secrets.ACL_USERNAME }}
+          ACL_PASSWORD: <redacted>
+          ACL_SERVER_ID: ${{ secrets.ACL_SERVER_ID }}
+          ACL_BASE_URL: ${{ vars.ACL_BASE_URL }}
+          TG_BOT_TOKEN: <redacted>
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          RESTART_ACTION: ${{ inputs.action }}
+        run: node restart.mjs

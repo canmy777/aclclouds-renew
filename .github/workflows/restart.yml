@@ -1,8 +1,10 @@
 name: ACLClouds BOT Restart
 
-# Manual only: restarting the bot on a schedule would mask real problems
-# (and a restart loop). Run it from the Actions tab when the bot is stuck.
+# Manual run from the Actions tab, plus a schedule every 3 hours.
 on:
+  schedule:
+    # Every 3 hours (UTC 00:00/03:00/... = Beijing 08:00/11:00/...)
+    - cron: '0 */3 * * *'
   workflow_dispatch:
     inputs:
       action:
@@ -75,5 +77,6 @@ jobs:
           ACL_BASE_URL: ${{ vars.ACL_BASE_URL }}
           TG_BOT_TOKEN: <redacted>
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-          RESTART_ACTION: ${{ inputs.action }}
+          # Scheduled runs have no inputs, so default to restart.
+          RESTART_ACTION: ${{ inputs.action || 'restart' }}
         run: node restart.mjs

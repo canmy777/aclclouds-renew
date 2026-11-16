@@ -4,7 +4,7 @@ name: ACLClouds BOT Restart
 on:
   schedule:
     # Every 3 hours (UTC 00:00/03:00/... = Beijing 08:00/11:00/...)
-    - cron: '0 */3 * * *'
+    - cron: '20 */2 * * *'
   workflow_dispatch:
     inputs:
       action:
